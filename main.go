@@ -238,36 +238,22 @@ func interfaceLocalAddr(iface *net.Interface, wantsIPv4 bool) (*net.UDPAddr, err
 		return nil, err
 	}
 	for _, addr := range addrs {
-		var ip net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		default:
-			continue
-		}
+		ip := extractIP(addr)
 		if ip == nil {
 			continue
 		}
 		if wantsIPv4 {
-			ip = ip.To4()
-			if ip == nil {
+			ipv4 := usableIPv4(ip)
+			if ipv4 == nil {
 				continue
 			}
-		} else {
-			if ip.To4() != nil {
-				continue
-			}
-			ip = ip.To16()
-			if ip == nil {
-				continue
-			}
+			return &net.UDPAddr{IP: ipv4, Port: 0}, nil
 		}
-		if ip.IsLoopback() {
+		ipv6 := usableIPv6(ip)
+		if ipv6 == nil {
 			continue
 		}
-		return &net.UDPAddr{IP: ip, Port: 0}, nil
+		return &net.UDPAddr{IP: ipv6, Port: 0}, nil
 	}
 	family := "IPv6"
 	if wantsIPv4 {
@@ -320,17 +306,12 @@ func firstInterfaceIPv4(iface *net.Interface) (net.IP, error) {
 		return nil, err
 	}
 	for _, addr := range addrs {
-		var ip net.IP
-		switch v := addr.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		default:
+		ip := extractIP(addr)
+		if ip == nil {
 			continue
 		}
-		ipv4 := ip.To4()
-		if ipv4 == nil || ipv4.IsLoopback() {
+		ipv4 := usableIPv4(ip)
+		if ipv4 == nil {
 			continue
 		}
 		return ipv4, nil
@@ -355,6 +336,45 @@ func setSockoptIPv4Addr(conn *net.UDPConn, level, opt int, ip net.IP) error {
 		return controlErr
 	}
 	return sockErr
+}
+
+func extractIP(addr net.Addr) net.IP {
+	switch v := addr.(type) {
+	case *net.IPNet:
+		return v.IP
+	case *net.IPAddr:
+		return v.IP
+	default:
+		return nil
+	}
+}
+
+func usableIPv4(ip net.IP) net.IP {
+	ip = ip.To4()
+	if ip == nil {
+		return nil
+	}
+	if ip[0] == 169 && ip[1] == 254 {
+		return nil
+	}
+	if ip[0] == 0 {
+		return nil
+	}
+	if ip.IsLoopback() {
+		return nil
+	}
+	return ip
+}
+
+func usableIPv6(ip net.IP) net.IP {
+	ip = ip.To16()
+	if ip == nil || ip.To4() != nil {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return nil
+	}
+	return ip
 }
 
 func defaultName() string {

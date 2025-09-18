@@ -32,6 +32,7 @@ When you start the program it will join the default group `239.42.0.1:9999`, ann
 | `-port` | `9999` | UDP port number shared by every participant. |
 | `-name` | system username | Display name shown next to your messages. |
 | `-iface` | system default | Specific network interface to bind to (useful on machines with multiple NICs). |
+| `-ttl` | `1` | Multicast TTL / hop limit. Increase if a router sits between chat participants. |
 
 Example with a custom interface and display name:
 

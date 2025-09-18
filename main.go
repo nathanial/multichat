@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -30,10 +31,15 @@ func main() {
 	port := flag.Int("port", 9999, "UDP port to use for the multicast group")
 	nickname := flag.String("name", "", "display name to use in the chat (defaults to your username)")
 	ifaceName := flag.String("iface", "", "network interface name to join for multicast traffic (optional)")
+	ttl := flag.Int("ttl", 1, "multicast TTL / hop limit (0-255)")
 	flag.Parse()
 
 	if *port <= 0 || *port > 65535 {
 		fmt.Fprintf(os.Stderr, "invalid port: %d\n", *port)
+		os.Exit(2)
+	}
+	if *ttl < 0 || *ttl > 255 {
+		fmt.Fprintf(os.Stderr, "invalid ttl: %d (must be 0-255)\n", *ttl)
 		os.Exit(2)
 	}
 
@@ -97,6 +103,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer sendConn.Close()
+
+	if err := setMulticastTTL(sendConn, wantsIPv4, *ttl); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: unable to set multicast TTL to %d: %v\n", *ttl, err)
+	}
 
 	clientID := randomID()
 
@@ -260,6 +270,30 @@ func interfaceLocalAddr(iface *net.Interface, wantsIPv4 bool) (*net.UDPAddr, err
 		family = "IPv4"
 	}
 	return nil, fmt.Errorf("no %s address found on interface %s", family, iface.Name)
+}
+
+func setMulticastTTL(conn *net.UDPConn, wantsIPv4 bool, ttl int) error {
+	if ttl < 0 || ttl > 255 {
+		return fmt.Errorf("ttl must be within 0-255")
+	}
+	if wantsIPv4 {
+		return setSockoptInt(conn, syscall.IPPROTO_IP, syscall.IP_MULTICAST_TTL, ttl)
+	}
+	return setSockoptInt(conn, syscall.IPPROTO_IPV6, syscall.IPV6_MULTICAST_HOPS, ttl)
+}
+
+func setSockoptInt(conn *net.UDPConn, level, opt, value int) error {
+	rc, err := conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var sockErr error
+	if controlErr := rc.Control(func(fd uintptr) {
+		sockErr = syscall.SetsockoptInt(int(fd), level, opt, value)
+	}); controlErr != nil {
+		return controlErr
+	}
+	return sockErr
 }
 
 func defaultName() string {

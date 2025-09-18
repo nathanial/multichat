@@ -104,6 +104,10 @@ func main() {
 	}
 	defer sendConn.Close()
 
+	if err := setMulticastInterface(sendConn, joinInterface, wantsIPv4); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: unable to set multicast interface: %v\n", err)
+	}
+
 	if err := setMulticastTTL(sendConn, wantsIPv4, *ttl); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: unable to set multicast TTL to %d: %v\n", *ttl, err)
 	}
@@ -290,6 +294,63 @@ func setSockoptInt(conn *net.UDPConn, level, opt, value int) error {
 	var sockErr error
 	if controlErr := rc.Control(func(fd uintptr) {
 		sockErr = syscall.SetsockoptInt(int(fd), level, opt, value)
+	}); controlErr != nil {
+		return controlErr
+	}
+	return sockErr
+}
+
+func setMulticastInterface(conn *net.UDPConn, iface *net.Interface, wantsIPv4 bool) error {
+	if iface == nil {
+		return nil
+	}
+	if wantsIPv4 {
+		ip, err := firstInterfaceIPv4(iface)
+		if err != nil {
+			return err
+		}
+		return setSockoptIPv4Addr(conn, syscall.IPPROTO_IP, syscall.IP_MULTICAST_IF, ip)
+	}
+	return setSockoptInt(conn, syscall.IPPROTO_IPV6, syscall.IPV6_MULTICAST_IF, iface.Index)
+}
+
+func firstInterfaceIPv4(iface *net.Interface) (net.IP, error) {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		ipv4 := ip.To4()
+		if ipv4 == nil || ipv4.IsLoopback() {
+			continue
+		}
+		return ipv4, nil
+	}
+	return nil, fmt.Errorf("interface %s has no usable IPv4 address", iface.Name)
+}
+
+func setSockoptIPv4Addr(conn *net.UDPConn, level, opt int, ip net.IP) error {
+	if len(ip) != net.IPv4len {
+		return fmt.Errorf("invalid IPv4 length: %d", len(ip))
+	}
+	rc, err := conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var sockErr error
+	if controlErr := rc.Control(func(fd uintptr) {
+		var addr [4]byte
+		copy(addr[:], ip)
+		sockErr = syscall.SetsockoptInet4Addr(int(fd), level, opt, addr)
 	}); controlErr != nil {
 		return controlErr
 	}

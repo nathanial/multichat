@@ -19,7 +19,8 @@
 - `ip maddr show dev enp3s0` → ensure the interface subscribed to `239.42.0.1`.
 - `sysctl net.ipv4.conf.enp3s0.mc_forwarding` → should be `0`; even so, multicast routers may discard TTL 1 if forwarding is disabled upstream.
 - Use `socat` to isolate the transport layer: `socat -v UDP4-RECVFROM:9999,ip-add-membership=239.42.0.1:0,fork -` on the Pi.
-- On Red Hat, some packaged socat versions lack `ip-multicast-interface`; instead run `socat - UDP4-DATAGRAM:239.42.0.1:9999,source=<redhat-ip>,ip-multicast-ttl=8` (replace `<redhat-ip>` with the interface's IPv4 address) to force the outbound interface.
+- On Red Hat, use interface-based forcing: `socat - UDP4-DATAGRAM:239.42.0.1:9999,ip-multicast-if=enp3s0,ip-multicast-ttl=8` (replace `enp3s0` with your NIC name). Older builds accept device names rather than IP literals.
+- If the distribution lacks `ip-multicast-if`, fall back to binding a source: `socat - UDP4-DATAGRAM:239.42.0.1:9999,bind=192.168.1.20:0,ip-multicast-ttl=8` (swap in the Red Hat host address). Check available options with `socat -hh | grep multicast`.
 - Reverse the roles (send from Pi, receive on Red Hat) to confirm both directions independently of the Go tool.
 
 ## Configuration experiments

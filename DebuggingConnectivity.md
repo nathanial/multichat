@@ -30,3 +30,4 @@
 - Check SELinux audit logs: `sudo ausearch -m avc -ts recent` for multicast-related denials.
 - Inspect the LAN gear (IGMP snooping tables or multicast filtering) if packets leave the host but never reach the Pi.
 - If packets arrive on the Pi per `tcpdump` but the app remains silent, double-check `iptables -L -n` (or `nft list ruleset`) and confirm `net.ipv4.conf.*.rp_filter` is not discarding them.
+- As a fallback on multicast-restricted networks, run `./multichat -broadcast -group 192.168.1.255` to deliver messages via subnet broadcast.

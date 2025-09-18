@@ -31,8 +31,16 @@ func main() {
 	port := flag.Int("port", 9999, "UDP port to use for the multicast group")
 	nickname := flag.String("name", "", "display name to use in the chat (defaults to your username)")
 	ifaceName := flag.String("iface", "", "network interface name to join for multicast traffic (optional)")
+	broadcast := flag.Bool("broadcast", false, "use UDP broadcast instead of multicast (IPv4 only)")
 	ttl := flag.Int("ttl", 1, "multicast TTL / hop limit (0-255)")
 	flag.Parse()
+
+	var groupExplicit bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "group" {
+			groupExplicit = true
+		}
+	})
 
 	if *port <= 0 || *port > 65535 {
 		fmt.Fprintf(os.Stderr, "invalid port: %d\n", *port)
@@ -43,12 +51,24 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *broadcast && !groupExplicit && *group == "239.42.0.1" {
+		*group = "255.255.255.255"
+	}
+
 	groupIP := net.ParseIP(*group)
 	if groupIP == nil {
 		fmt.Fprintf(os.Stderr, "invalid multicast address: %s\n", *group)
 		os.Exit(2)
 	}
-	if !groupIP.IsMulticast() {
+
+	mode := "multicast"
+	if *broadcast {
+		mode = "broadcast"
+		if groupIP.To4() == nil {
+			fmt.Fprintf(os.Stderr, "broadcast requires an IPv4 address, got %s\n", *group)
+			os.Exit(2)
+		}
+	} else if !groupIP.IsMulticast() {
 		fmt.Fprintf(os.Stderr, "%s is not a multicast address\n", *group)
 		os.Exit(2)
 	}
@@ -74,15 +94,33 @@ func main() {
 	}
 
 	wantsIPv4 := groupIP.To4() != nil
-	multicastAddr := &net.UDPAddr{IP: groupIP, Port: *port}
-	if joinInterface != nil && !wantsIPv4 {
-		multicastAddr.Zone = joinInterface.Name
+	targetAddr := &net.UDPAddr{IP: groupIP, Port: *port}
+	if joinInterface != nil && !wantsIPv4 && !*broadcast {
+		targetAddr.Zone = joinInterface.Name
 	}
 
-	recvConn, err := net.ListenMulticastUDP(network, joinInterface, multicastAddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to join multicast group: %v\n", err)
-		os.Exit(1)
+	var (
+		recvConn *net.UDPConn
+		err      error
+	)
+	if *broadcast {
+		recvConn, err = listenBroadcast(*port)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to bind broadcast listener: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		recvConn, err = net.ListenMulticastUDP(network, joinInterface, targetAddr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to join multicast group: %v\n", err)
+			os.Exit(1)
+		}
+		if joinInterface != nil && wantsIPv4 {
+			// Ensure IPv4 multicast listener uses the desired interface
+			if err := setMulticastInterface(recvConn, joinInterface, wantsIPv4); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: unable to pin listener to interface: %v\n", err)
+			}
+		}
 	}
 	defer recvConn.Close()
 
@@ -97,19 +135,27 @@ func main() {
 		}
 	}
 
-	sendConn, err := net.DialUDP(network, localSendAddr, multicastAddr)
+	sendConn, err := net.DialUDP(network, localSendAddr, targetAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to set up sender socket: %v\n", err)
 		os.Exit(1)
 	}
 	defer sendConn.Close()
 
-	if err := setMulticastInterface(sendConn, joinInterface, wantsIPv4); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: unable to set multicast interface: %v\n", err)
-	}
-
-	if err := setMulticastTTL(sendConn, wantsIPv4, *ttl); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: unable to set multicast TTL to %d: %v\n", *ttl, err)
+	if *broadcast {
+		if err := setBroadcast(sendConn); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unable to enable broadcast: %v\n", err)
+		}
+		if err := setIPv4TTL(sendConn, *ttl); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unable to set broadcast TTL to %d: %v\n", *ttl, err)
+		}
+	} else {
+		if err := setMulticastInterface(sendConn, joinInterface, wantsIPv4); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unable to set multicast interface: %v\n", err)
+		}
+		if err := setMulticastTTL(sendConn, wantsIPv4, *ttl); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: unable to set multicast TTL to %d: %v\n", *ttl, err)
+		}
 	}
 
 	clientID := randomID()
@@ -117,7 +163,7 @@ func main() {
 	var printMu sync.Mutex
 
 	printMu.Lock()
-	fmt.Printf("Joined multicast chat %s:%d over %s as %s\n", multicastAddr.IP, multicastAddr.Port, network, name)
+	fmt.Printf("Joined %s chat %s:%d over %s as %s\n", mode, targetAddr.IP, targetAddr.Port, network, name)
 	fmt.Println("Type your messages and press Enter to send. Press Ctrl+C or Ctrl+D to exit.")
 	fmt.Print("> ")
 	printMu.Unlock()
@@ -375,6 +421,19 @@ func usableIPv6(ip net.IP) net.IP {
 		return nil
 	}
 	return ip
+}
+
+func listenBroadcast(port int) (*net.UDPConn, error) {
+	addr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
+	return net.ListenUDP("udp4", addr)
+}
+
+func setBroadcast(conn *net.UDPConn) error {
+	return setSockoptInt(conn, syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+}
+
+func setIPv4TTL(conn *net.UDPConn, ttl int) error {
+	return setSockoptInt(conn, syscall.IPPROTO_IP, syscall.IP_TTL, ttl)
 }
 
 func defaultName() string {

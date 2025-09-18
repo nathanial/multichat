@@ -28,16 +28,20 @@ When you start the program it will join the default group `239.42.0.1:9999`, ann
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
-| `-group` | `239.42.0.1` | Multicast group IP to join (IPv4 or IPv6). |
+| `-group` | `239.42.0.1` | Multicast group IP to join (IPv4 or IPv6). Defaults to `255.255.255.255` when `-broadcast` is used. |
 | `-port` | `9999` | UDP port number shared by every participant. |
 | `-name` | system username | Display name shown next to your messages. |
 | `-iface` | system default | Specific network interface to bind to (useful on machines with multiple NICs). |
 | `-ttl` | `1` | Multicast TTL / hop limit. Increase if a router sits between chat participants. |
+| `-broadcast` | `false` | Switch to IPv4 broadcast mode (one-to-many on the local subnet). |
 
 Example with a custom interface and display name:
 
 ```sh
 go run . -name "Alice" -iface en0
+
+# Broadcast on Wi-Fi using the subnet broadcast address
+go run . -broadcast -group 192.168.1.255 -iface en0 -ttl 2
 ```
 
 Start the program on every machine using the same group and port values. Messages should begin appearing immediately.
@@ -47,4 +51,5 @@ Start the program on every machine using the same group and port values. Message
 - `Ctrl+C` or `Ctrl+D` cleanly exits the program.
 - Messages longer than the UDP payload limit (about 64 KB with encoding) are rejected locally so they cannot be truncated on the network.
 - If you need to span subnets, adjust your router to forward multicast or try a group in the administratively-scoped range (`239.0.0.0/8`).
+- When multicast is filtered on your LAN, switch to `-broadcast` with the subnet broadcast address for local-segment delivery.
 - On IPv6, supplying `-iface` is often required for link-local multicast groups (e.g. addresses starting with `ff02`).

@@ -9,6 +9,7 @@
 ## Build, Test, and Development Commands
 - `go build ./...` compiles the chat binary; use `GOCACHE="$(pwd)/.gocache"` when working in restricted environments.
 - `go run .` launches the chat directly for interactive testing; add flags such as `-iface` or `-ttl` as needed.
+- When troubleshooting, try `go run . -broadcast -group 192.168.1.255` to confirm broadcast fallback still works on IPv4-only segments.
 - `gofmt -w <files>` formats Go sources; run it before committing changes.
 
 ## Coding Style & Naming Conventions
